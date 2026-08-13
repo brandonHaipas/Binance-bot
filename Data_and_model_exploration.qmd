@@ -1,0 +1,251 @@
+---
+title: Data and model exploration
+jupyter: python3
+---
+
+
+
+In this notebook you will find information extracted from the historical data of binance, and how different models perform trading.
+
+```{python}
+from binance.spot import Spot
+import pandas as pd
+from datetime import datetime
+# binance has a limit of 500 elements per call (default, max 1000), so you can make calls per year in order to get more data.
+def get_historical_data(symbol, interval, start_date, end_date):
+    # Initialize the Spot client
+    client = Spot()
+    
+    # Convert date strings to milliseconds
+    start_date = int(datetime.strptime(start_date, "%Y-%m-%d").timestamp() * 1000)
+    end_date = int(datetime.strptime(end_date, "%Y-%m-%d").timestamp() * 1000)
+    
+    # Fetch the historical klines (candlestick data)
+    klines = client.klines(symbol=symbol, interval=interval, startTime=start_date, endTime=end_date)
+    
+    # Convert to DataFrame
+    df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_asset_volume', 'number_of_trades', 'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'])
+    
+    # Convert timestamp to datetime
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    
+    # Set timestamp as index
+    df.set_index('timestamp', inplace=True)
+    
+    # Convert numeric columns to appropriate types
+    numeric_columns = ['open', 'high', 'low', 'close', 'volume', 'quote_asset_volume', 'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume']
+    df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric, axis=1)
+    
+    return df
+
+# Example usage
+symbol = 'BTCUSDT'
+interval = '1d'  # 1 day interval
+start_date = '2022-01-01'
+end_date = '2023-12-31'
+
+df = get_historical_data(symbol, interval, start_date, end_date)
+```
+
+```{python}
+df.head()
+```
+
+```{python}
+df.shape
+```
+
+```{python}
+df.columns.tolist()
+```
+
+```{python}
+df['ignore'].value_counts()
+```
+
+**Ideas to complement the dataset**: 
+- Make more calls to the API in order to get more information of past transactions.
+- Include information of stocks in the same period and include some data about the sentiment about crypto currencies at the moment.
+- Include information about the economy in general, try to get a reliable source of data that can be contrasted with daily.
+- Include information about trading between other crypto currencies beside bitcoin, like ethereum, worldcoin, etc.
+
+```{python}
+# collect information about stocks of desired assets
+
+import yfinance as yf
+
+# set the ticker
+ticker = 'AMZN'
+
+amzn_data = yf.download(ticker, start_date, end_date)
+
+amzn_data.tail()
+```
+
+```{python}
+# yahoo finance has the same problem, it can only get 500 elements in one API call. 
+# The next step will be to try making more calls for different years.
+amzn_data.shape
+```
+
+Another idea for capturing the sentiment for bitcoin is to use selenium to scrap data from the fear/greed historical records in [coincodex](https://coincodex.com/sentiment/).
+Another source for daily updates on fear and greed data is [alternative.me](https://alternative.me/crypto/fear-and-greed-index/#api), this site has data from 2018 to the last available date (today).
+
+```{python}
+import requests
+
+limit = 0 # 0 is all data, any other number will get you as many days as the number.
+format = 'json' # either csv or json (default)
+URL = f"https://api.alternative.me/fng/?limit={limit}&format={format}"
+
+r = requests.get(url=URL)
+```
+
+```{python}
+data = r.json()
+print(data)
+```
+
+```{python}
+from datetime import datetime, timedelta
+
+def to_datetime(timestamp):
+    if isinstance(timestamp, (int, float)):
+        return datetime.fromtimestamp(timestamp)
+    elif isinstance(timestamp, str):
+        return datetime.fromtimestamp(int(timestamp))
+    elif isinstance(timestamp, datetime):
+        return timestamp
+    else:
+        raise ValueError(f"Unexpected timestamp type: {type(timestamp)}")
+
+dt_list = [to_datetime(elem["timestamp"]) for elem in data['data']]
+print(dt_list[-1])  # Print the last element
+print(min(dt_list))
+```
+
+Let's check if every day between the start and end date is registered in the dataset:
+
+```{python}
+delta_t = timedelta(days=1)
+start_date = min(dt_list)
+end_date = max(dt_list)
+delta_days = end_date - start_date
+print(delta_days)
+prev_dates = []
+
+for i in range(0, len(dt_list)-1):
+    d = dt_list[i] - dt_list[i+1]
+    if d > delta_t:
+        print(d)
+        prev_dates.append(dt_list[i+1])
+        
+print(len(dt_list))
+for elem in prev_dates:
+    print(elem)
+```
+
+```{python}
+FG_elements = [{'date':datetime.fromtimestamp(int(elem['timestamp'])), 'value':elem['value'], 'value_classification':elem['value_classification']} for elem in data['data']]
+
+print(len(FG_elements))
+```
+
+```{python}
+FG_data = pd.DataFrame()
+FG_data['date'] = [elem['date'] for elem in  FG_elements]
+FG_data['date'] = FG_data['date'].dt.floor('D')
+FG_data['value'] = [elem['value'] for elem in FG_elements]
+FG_data['value_classification'] = [elem['value_classification'] for elem in FG_elements]
+FG_data.set_index('date', inplace=True)
+print(FG_data['value_classification'].value_counts())
+```
+
+```{python}
+null_matrix = FG_data.isnull()
+
+null_matrix.values.sum()
+```
+
+```{python}
+FG_data.head()
+```
+
+```{python}
+FG_data.describe()
+```
+
+```{python}
+FG_data.info()
+```
+
+```{python}
+FG_data['value'] = FG_data['value'].map(lambda x: float(x))
+FG_data.info()
+```
+
+```{python}
+filtered_FG_data = FG_data[FG_data.index > prev_dates[len(prev_dates)-1]]
+```
+
+```{python}
+filtered_FG_data.info()
+```
+
+As we can see, from this date on all days are recorded in the dataset, now we can extract the information from binance starting from that date.
+
+```{python}
+df.index[0].date()
+```
+
+```{python}
+start = datetime(2018, 4,16)
+end = datetime(2024,8,13)
+rng = pd.date_range(start = start, end = end, periods=5, normalize=True).to_series().dt.floor('D')
+rng = rng.tolist()
+print(rng)
+```
+
+```{python}
+# in order to get the data from binance, the requests must have a length inferior to 500
+# for that, we can set a number of chunks that has less than 500 elements
+
+def get_binance_data_by_chuncks(symbol, interval, start_date, end_date, periods):
+    # milliseconds
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    print(start)
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+    print(end)
+    rng = pd.date_range(start = start, end = end, periods=periods, normalize=True).to_series().dt.floor('D')
+    rng = rng.tolist()
+    
+    delta = timedelta(days = 1)
+    df_list = []
+    for i in range(0, len(rng)-1):
+        if rng[i] == start:
+            df_list.append(get_historical_data(symbol, interval, rng[i].strftime('%Y-%m-%d'), rng[i+1].strftime('%Y-%m-%d')))
+        else:
+            df_list.append(get_historical_data(symbol, interval, (rng[i]+delta).strftime('%Y-%m-%d'), rng[i+1].strftime('%Y-%m-%d')))
+    df = pd.concat(df_list)
+    return df
+```
+
+```{python}
+start_date = '2018-04-16'
+end_date = '2024-08-13'
+symbol = 'BTCUSDT'
+interval = '1d'  # 1 day interval
+periods = 5
+
+binance_data = get_binance_data_by_chuncks(symbol, interval,start_date, end_date, periods)
+binance_data.shape
+```
+
+```{python}
+binance_data.info()
+```
+
+```{python}
+binance_data.describe()
+```
+
